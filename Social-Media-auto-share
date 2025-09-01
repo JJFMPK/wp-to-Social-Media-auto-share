@@ -1,0 +1,226 @@
+<?php
+/*
+Plugin Name: WP Auto Share (Facebook + X + LinkedIn)
+Plugin URI: https://yourwebsite.com
+Description: Automatically shares WordPress posts to Facebook Page, X (Twitter), and LinkedIn with Test Share feature.
+Version: 2.1
+Author: Your Name
+Author URI: https://yourwebsite.com
+License: GPL2
+*/
+
+if (!defined('ABSPATH')) {
+    exit; // Exit if accessed directly
+}
+
+/**
+ * Add settings menu
+ */
+add_action('admin_menu', 'wpas_add_menu');
+function wpas_add_menu() {
+    add_options_page(
+        'WP Auto Share Settings',
+        'WP Auto Share',
+        'manage_options',
+        'wp-auto-share',
+        'wpas_settings_page'
+    );
+}
+
+/**
+ * Register settings
+ */
+add_action('admin_init', 'wpas_register_settings');
+function wpas_register_settings() {
+    // Facebook
+    register_setting('wpas_settings_group', 'wpas_fb_page_id', ['sanitize_callback' => 'sanitize_text_field']);
+    register_setting('wpas_settings_group', 'wpas_fb_access_token', ['sanitize_callback' => 'sanitize_text_field']);
+
+    // X (Twitter)
+    register_setting('wpas_settings_group', 'wpas_x_bearer_token', ['sanitize_callback' => 'sanitize_text_field']);
+
+    // LinkedIn
+    register_setting('wpas_settings_group', 'wpas_li_access_token', ['sanitize_callback' => 'sanitize_text_field']);
+    register_setting('wpas_settings_group', 'wpas_li_urn', ['sanitize_callback' => 'sanitize_text_field']);
+}
+
+/**
+ * Settings page HTML
+ */
+function wpas_settings_page() {
+    ?>
+    <div class="wrap">
+        <h1>WP Auto Share Settings</h1>
+        <form method="post" action="options.php">
+            <?php
+            settings_fields('wpas_settings_group');
+            do_settings_sections('wpas_settings_group');
+            ?>
+            <h2>🔹 Facebook Settings</h2>
+            <table class="form-table">
+                <tr><th>Facebook Page ID</th>
+                    <td><input type="text" name="wpas_fb_page_id" 
+                        value="<?php echo esc_attr(get_option('wpas_fb_page_id')); ?>" style="width: 400px;" /></td></tr>
+                <tr><th>Facebook Access Token</th>
+                    <td><input type="text" name="wpas_fb_access_token" 
+                        value="<?php echo esc_attr(get_option('wpas_fb_access_token')); ?>" style="width: 400px;" /></td></tr>
+            </table>
+
+            <h2>🔹 X (Twitter) Settings</h2>
+            <table class="form-table">
+                <tr><th>Bearer Token</th>
+                    <td><input type="text" name="wpas_x_bearer_token" 
+                        value="<?php echo esc_attr(get_option('wpas_x_bearer_token')); ?>" style="width: 400px;" /></td></tr>
+            </table>
+
+            <h2>🔹 LinkedIn Settings</h2>
+            <table class="form-table">
+                <tr><th>Access Token</th>
+                    <td><input type="text" name="wpas_li_access_token" 
+                        value="<?php echo esc_attr(get_option('wpas_li_access_token')); ?>" style="width: 400px;" /></td></tr>
+                <tr><th>Profile/Company URN</th>
+                    <td><input type="text" name="wpas_li_urn" 
+                        value="<?php echo esc_attr(get_option('wpas_li_urn')); ?>" style="width: 400px;" />
+                        <p class="description">Example: <code>urn:li:person:xxxx</code> or <code>urn:li:organization:xxxx</code></p>
+                    </td></tr>
+            </table>
+
+            <?php submit_button(); ?>
+        </form>
+
+        <hr>
+        <h2>🧪 Test Share</h2>
+        <form method="post">
+            <p>Select a post to test sharing:</p>
+            <select name="test_post_id">
+                <?php
+                $posts = get_posts(['numberposts' => 5, 'post_status' => 'publish']);
+                foreach ($posts as $p) {
+                    echo "<option value='{$p->ID}'>{$p->post_title}</option>";
+                }
+                ?>
+            </select>
+            <?php submit_button('Test Share Now', 'primary', 'wpas_test_share'); ?>
+        </form>
+        <?php
+        if (isset($_POST['wpas_test_share']) && !empty($_POST['test_post_id'])) {
+            $post_ID = intval($_POST['test_post_id']);
+            $post = get_post($post_ID);
+            echo "<div class='updated'><p>✅ Test Share triggered for post: <strong>{$post->post_title}</strong></p></div>";
+            wpas_share_to_all($post_ID, $post);
+        }
+        ?>
+    </div>
+    <?php
+}
+
+/**
+ * Main hook to share post on publish
+ */
+add_action('publish_post', 'wpas_share_to_all', 10, 2);
+function wpas_share_to_all($post_ID, $post) {
+    $title = get_the_title($post_ID);
+    $link  = get_permalink($post_ID);
+    $image_url = get_the_post_thumbnail_url($post_ID, 'full');
+
+    wpas_share_to_facebook($title, $link, $image_url);
+    wpas_share_to_x($title, $link);
+    wpas_share_to_linkedin($title, $link, $image_url);
+}
+
+/**
+ * Share to Facebook
+ */
+function wpas_share_to_facebook($title, $link, $image_url) {
+    $page_id = get_option('wpas_fb_page_id');
+    $access_token = get_option('wpas_fb_access_token');
+    if (!$page_id || !$access_token) return;
+
+    if ($image_url) {
+        $url = "https://graph.facebook.com/{$page_id}/photos";
+        $data = ['url'=>$image_url,'caption'=>$title."\n\n".$link,'access_token'=>$access_token];
+    } else {
+        $url = "https://graph.facebook.com/{$page_id}/feed";
+        $data = ['message'=>$title."\n\n".$link,'access_token'=>$access_token];
+    }
+
+    wpas_post_request($url, $data, "Facebook");
+}
+
+/**
+ * Share to X (Twitter)
+ */
+function wpas_share_to_x($title, $link) {
+    $bearer = get_option('wpas_x_bearer_token');
+    if (!$bearer) return;
+
+    $url = "https://api.twitter.com/2/tweets";
+    $data = ['text' => $title . " " . $link];
+
+    $options = [
+        'http' => [
+            'method'  => 'POST',
+            'content' => json_encode($data),
+            'header'  => "Content-Type: application/json\r\nAuthorization: Bearer {$bearer}\r\n"
+        ]
+    ];
+
+    $context  = stream_context_create($options);
+    $result = file_get_contents($url, false, $context);
+    if ($result === FALSE) error_log("WP Auto Share: Failed to post to X");
+}
+
+/**
+ * Share to LinkedIn
+ */
+function wpas_share_to_linkedin($title, $link, $image_url) {
+    $access_token = get_option('wpas_li_access_token');
+    $urn = get_option('wpas_li_urn');
+    if (!$access_token || !$urn) return;
+
+    $url = "https://api.linkedin.com/v2/ugcPosts";
+
+    $data = [
+        "author" => $urn,
+        "lifecycleState" => "PUBLISHED",
+        "specificContent" => [
+            "com.linkedin.ugc.ShareContent" => [
+                "shareCommentary" => ["text" => $title . " " . $link],
+                "shareMediaCategory" => $image_url ? "IMAGE" : "NONE",
+                "media" => $image_url ? [[
+                    "status" => "READY",
+                    "originalUrl" => $image_url,
+                    "title" => ["text" => $title]
+                ]] : []
+            ]
+        ],
+        "visibility" => ["com.linkedin.ugc.MemberNetworkVisibility" => "PUBLIC"]
+    ];
+
+    $options = [
+        'http' => [
+            'method'  => 'POST',
+            'content' => json_encode($data),
+            'header'  => "Content-Type: application/json\r\nAuthorization: Bearer {$access_token}\r\nx-li-format: json\r\n"
+        ]
+    ];
+
+    $context  = stream_context_create($options);
+    $result = file_get_contents($url, false, $context);
+    if ($result === FALSE) error_log("WP Auto Share: Failed to post to LinkedIn");
+}
+
+/**
+ * Helper function for POST requests
+ */
+function wpas_post_request($url, $data, $platform) {
+    $options = [
+        'http' => [
+            'method'  => 'POST',
+            'content' => http_build_query($data),
+            'header'  => "Content-Type: application/x-www-form-urlencoded\r\n"
+        ]
+    ];
+    $context  = stream_context_create($options);
+    file_get_contents($url, false, $context);
+}
